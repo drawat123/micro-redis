@@ -12,12 +12,12 @@
 // See docs/PRIMER.md §4 for the event-loop model this implements.
 class EchoServer {
 public:
-    explicit EchoServer(std::uint16_t port);
+  explicit EchoServer(std::uint16_t port);
 
-    // Runs the event loop forever (until the process is killed).
-    // Throws std::system_error if a syscall fails during setup or the loop.
-    void run();
+  // Runs the event loop forever (until the process is killed).
+  // Throws std::system_error if a syscall fails during setup or the loop.
+  void run();
 
 private:
-    std::uint16_t port_;
+  std::uint16_t port_;
 };
