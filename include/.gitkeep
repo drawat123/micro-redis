@@ -1,0 +1,2 @@
+# Put your .hpp headers here (interfaces & header-only utilities).
+# .cpp implementations go in ../src/. Include them as: #include "server.hpp"

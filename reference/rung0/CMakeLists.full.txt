@@ -1,0 +1,54 @@
+# Top-level build description for micro-redis.
+#
+# CMake is the cross-platform replacement for a Visual Studio .sln/.vcxproj: this
+# file DESCRIBES the project; a generator (make or ninja) then BUILDS it. You run
+# it in two steps — configure once, then build (repeatedly, as you edit):
+#
+#     cmake -S . -B build            # configure: read this file, set up ./build
+#     cmake --build build -j         # compile everything, in parallel
+#
+# See docs/TOOLCHAIN.md for the full Visual-Studio → CMake mapping.
+
+cmake_minimum_required(VERSION 3.20)
+project(micro_redis LANGUAGES CXX)
+
+# --- Language standard: C++20, strictly (no compiler extensions). ------------
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Default to a Debug build (symbols, no optimizer) unless told otherwise.
+# For a Release build:  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+endif()
+
+# Warnings on, always. These catch a large fraction of beginner C++ bugs.
+add_compile_options(-Wall -Wextra -Wpedantic)
+
+# --- Optional sanitizer build. -----------------------------------------------
+# Turn on with:  cmake -S . -B build -DMICRO_REDIS_SANITIZE=ON
+# Then the program self-reports use-after-free, buffer overflows, leaks, and
+# undefined behavior at runtime. (Don't combine with ThreadSanitizer.)
+option(MICRO_REDIS_SANITIZE "Build with Address + UndefinedBehavior sanitizers" OFF)
+if(MICRO_REDIS_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
+# --- Core library: the logic, separated from main(). -------------------------
+# We split testable code into a library so BOTH the server executable and the
+# unit-test executable can link against it. (Header-only helpers like config.hpp
+# and fd.hpp come along via the include directory below.)
+add_library(microredis_core
+    src/server.cpp
+)
+target_include_directories(microredis_core PUBLIC src)
+
+# --- The server executable. --------------------------------------------------
+add_executable(micro-redis src/main.cpp)
+target_link_libraries(micro-redis PRIVATE microredis_core)
+
+# --- Tests. ------------------------------------------------------------------
+enable_testing()          # turns on `ctest`
+add_subdirectory(tests)   # brings in GoogleTest + the test binary
