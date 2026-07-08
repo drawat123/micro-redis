@@ -117,7 +117,7 @@ micro-redis/
 ├── docs/                # PRIMER.md (how Redis works), TOOLCHAIN.md (VS→Linux)
 ├── include/             # YOUR headers (.hpp) — interfaces & header-only utils
 ├── src/                 # YOUR sources (.cpp) — implementations + main.cpp
-├── reference/rung0/     # Claude's rung-0 solution — peek only if truly stuck
+├── tests/               # Test cases
 ├── CMakeLists.txt       # build description (auto-compiles every src/*.cpp)
 ├── Dockerfile           # the Linux dev environment
 └── README.md

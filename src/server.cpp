@@ -1,5 +1,7 @@
 #include "server.hpp"
+#include "dispatcher.hpp"
 #include "fd.hpp"
+#include "resp.hpp"
 
 #include <arpa/inet.h>  // htons, htonl
 #include <fcntl.h>      // fcntl, O_NONBLOCK
@@ -17,6 +19,11 @@
 #include <unordered_map>
 
 namespace {
+
+struct Connection {
+  Fd fd;
+  std::string inbuf;
+};
 
 // Turn a failed syscall (which reports errno) into a C++ exception
 // carrying the system error message. Cleaner than sprinkling perror()+exit()
@@ -83,9 +90,9 @@ Fd make_listener(std::uint16_t port) {
 
 } // namespace
 
-EchoServer::EchoServer(std::uint16_t port) : port_(port) {}
+Server::Server(std::uint16_t port) : port_(port) {}
 
-void EchoServer::run() {
+void Server::run() {
   Fd listener = make_listener(port_);
 
   std::cout << std::format("Server listening on port {}...\n", port_);
@@ -115,10 +122,9 @@ void EchoServer::run() {
   // Every accepted client is owned here. Erasing an entry closes its fd (Fd
   // destructor) — so connection cleanup is automatic and leak-free. In rung 1
   // this map's value grows from a bare Fd into a Connection with a read buffer.
-  std::unordered_map<int, Fd> connections;
+  std::unordered_map<int, Connection> connections;
 
   std::array<epoll_event, 64> ready{}; // epoll_wait fills this each iteration
-  std::array<char, 4096> buf{};        // scratch buffer for read/echo
 
   while (true) {
     // Block indefinitely until an event occurs (0% CPU utilization while
@@ -156,23 +162,52 @@ void EchoServer::run() {
                   EPOLLIN |
                       EPOLLET); // Using Edge-Triggered mode for performance
 
-        connections.emplace(client, Fd(client)); // take ownership
+        connections.emplace(client,
+                            Connection{Fd(client), {}}); // take ownership
 
         std::cout << "New client accepted on file descriptor: " << client
                   << "\n";
       }
       // Scenario B: An existing client socket has sent data to read
       else if (ready[i].events & EPOLLIN) {
+        size_t offset = 0;
+        bool close_conn = false;
+        auto &conn = connections.at(current_fd);
+
         while (true) {
+          std::array<char, 1024> buf{}; // scratch buffer for read
           ssize_t bytes_read = ::read(current_fd, buf.data(), buf.size());
 
           if (bytes_read > 0) {
-            // Successfully processed data payload chunks
-            std::cout << "Read " << bytes_read << " bytes from client "
-                      << current_fd << "\n";
-            std::cout.write(buf.data(), bytes_read);
-            // Echo the data back to client as a basic placeholder action
-            ::send(current_fd, buf.data(), bytes_read, MSG_NOSIGNAL);
+            conn.inbuf.append(buf.data(), bytes_read);
+
+            // Parse loop: execute all complete commands currently in the buffer
+            while (true) {
+              std::string_view view = conn.inbuf;
+              view.remove_prefix(offset);
+              if (view.empty()) {
+                break;
+              }
+
+              ParseResult res = parse_command(view);
+              if (res.status == ParseStatus::Incomplete) {
+                break; // wait for more bytes from the socket
+              }
+              if (res.status == ParseStatus::Error) {
+                close_conn = true;
+                break; // close the connection
+              }
+
+              std::string reply = dispatch(res.args, store_);
+              ::send(current_fd, reply.data(), reply.length(), MSG_NOSIGNAL);
+
+              offset += res.consumed; // advance past this command
+            }
+
+            if (close_conn) {
+              break;
+            }
+
           } else {
             // Read returned -1 or 0
             if (bytes_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -181,6 +216,7 @@ void EchoServer::run() {
 
             // If it reaches here, the connection is dead (either EOF or a hard
             // error)
+            close_conn = true;
             if (bytes_read == 0) {
               std::cout << "Client " << current_fd
                         << " disconnected cleanly.\n";
@@ -188,11 +224,16 @@ void EchoServer::run() {
               std::cerr << "Client read error on socket " << current_fd << ": "
                         << std::strerror(errno) << "\n";
             }
-
-            ::epoll_ctl(epoll.get(), EPOLL_CTL_DEL, current_fd, nullptr);
-            connections.erase(current_fd);
             break;
           }
+        }
+
+        if (close_conn) {
+          ::epoll_ctl(epoll.get(), EPOLL_CTL_DEL, current_fd, nullptr);
+          connections.erase(current_fd);
+        } else {
+          // drop everything consumed; keep the leftover
+          conn.inbuf.erase(0, offset);
         }
       }
     }

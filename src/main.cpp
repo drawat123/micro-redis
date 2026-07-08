@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
   std::fflush(stdout);
 
   try {
-    EchoServer server(port);
+    Server server(port);
     server.run();
   } catch (const std::exception &e) {
     std::fprintf(stderr, "fatal: %s\n", e.what());
