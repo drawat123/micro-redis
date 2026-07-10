@@ -82,7 +82,7 @@ ParseStatus parseBulkString(std::string_view input, std::size_t &start,
   return ParseStatus::Ok;
 }
 
-} // namespace — file-private helpers end here.
+} // namespace
 
 // Public API (external linkage): must live OUTSIDE the anonymous namespace so
 // server.cpp and the tests can link against it.
@@ -120,3 +120,5 @@ ParseResult parse_command(std::string_view input) {
 
   return res;
 }
+
+// *5\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n$2\r\nEX\r\n$3\r\n100\r\n

@@ -1,20 +1,37 @@
 #pragma once
 
-#include <optional>
+#include <chrono>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 
+using Clock = std::chrono::steady_clock;
+using TimePoint = Clock::time_point;
+
 class Store {
 public:
-  void set(std::string_view key, std::string_view value);
+  void set(std::string_view key, std::string_view value,
+           std::optional<std::chrono::seconds> ttl, TimePoint now);
 
-  const std::string* get(std::string_view key) const;
+  const std::string *get(std::string_view key, TimePoint now); // lazy-expires
 
-  bool del(std::string_view key);
+  long ttl(std::string_view key, TimePoint now); // -2 / -1 / remaining
 
-  bool exists(std::string_view key) const;
+  bool expire(std::string_view key, std::chrono::seconds ttl, TimePoint now);
+
+  void sweep(TimePoint now); // active expiration: drop everything expired
+
+  bool del(std::string_view key, TimePoint now);
+
+  bool exists(std::string_view key, TimePoint now);
 
 private:
-  std::unordered_map<std::string, std::string> store_;
+  struct Entry {
+    std::string value;
+    std::optional<TimePoint> expires_at; // nullopt = never
+  };
+
+  Entry *getEntry(std::string_view key, TimePoint now);
+
+  std::unordered_map<std::string, Entry> store_;
 };

@@ -127,17 +127,19 @@ void Server::run() {
   std::array<epoll_event, 64> ready{}; // epoll_wait fills this each iteration
 
   while (true) {
-    // Block indefinitely until an event occurs (0% CPU utilization while
+    // Block for timeout until an event occurs (0% CPU utilization while
     // waiting)
-    int num_events =
-        epoll_wait(epoll.get(), ready.data(), static_cast<int>(ready.size()),
-                   -1 /*wait forever*/);
+    int num_events = epoll_wait(epoll.get(), ready.data(),
+                                static_cast<int>(ready.size()), 200);
     if (num_events < 0) {
       if (errno == EINTR) {
         continue; // a signal interrupted us; just retry
       }
       fail("epoll_wait");
     }
+
+    // Remove expired keys.
+    store_.sweep(Clock::now());
 
     for (int i = 0; i < num_events; ++i) {
       const int current_fd = ready[i].data.fd;
@@ -198,7 +200,7 @@ void Server::run() {
                 break; // close the connection
               }
 
-              std::string reply = dispatch(res.args, store_);
+              std::string reply = dispatch(res.args, store_, Clock::now());
               ::send(current_fd, reply.data(), reply.length(), MSG_NOSIGNAL);
 
               offset += res.consumed; // advance past this command
