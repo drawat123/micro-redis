@@ -1,15 +1,19 @@
 #pragma once
 
 #include <chrono>
+#include <list>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 using Clock = std::chrono::steady_clock;
 using TimePoint = Clock::time_point;
 
 class Store {
 public:
+  Store(size_t capacity);
+
   void set(std::string_view key, std::string_view value,
            std::optional<std::chrono::seconds> ttl, TimePoint now);
 
@@ -25,13 +29,25 @@ public:
 
   bool exists(std::string_view key, TimePoint now);
 
+  std::size_t size() const;
+
 private:
   struct Entry {
     std::string value;
     std::optional<TimePoint> expires_at; // nullopt = never
   };
 
-  Entry *getEntry(std::string_view key, TimePoint now);
+  using StrEntryPair = std::pair<std::string, Entry>;
 
-  std::unordered_map<std::string, Entry> store_;
+  using LruIterator = std::list<StrEntryPair>::iterator;
+
+  using IndexIterator = std::unordered_map<std::string, LruIterator>::iterator;
+
+  IndexIterator getEntry(std::string_view key, TimePoint now, bool update_lru);
+
+  size_t max_capacity_;
+
+  // front = most-recently-used, back = least-recently-used
+  std::list<StrEntryPair> lru_;
+  std::unordered_map<std::string, LruIterator> index_; // key -> node
 };

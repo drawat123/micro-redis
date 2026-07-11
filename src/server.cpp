@@ -90,7 +90,7 @@ Fd make_listener(std::uint16_t port) {
 
 } // namespace
 
-Server::Server(std::uint16_t port) : port_(port) {}
+Server::Server(std::uint16_t port, std::size_t maxkeys) : store_(maxkeys), port_(port) {}
 
 void Server::run() {
   Fd listener = make_listener(port_);

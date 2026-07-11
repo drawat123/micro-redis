@@ -13,7 +13,7 @@
 // See docs/PRIMER.md §4 for the event-loop model this implements.
 class Server {
 public:
-  explicit Server(std::uint16_t port);
+  explicit Server(std::uint16_t port, std::size_t maxkeys);
 
   // Runs the event loop forever (until the process is killed).
   // Throws std::system_error if a syscall fails during setup or the loop.

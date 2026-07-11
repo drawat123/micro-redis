@@ -102,5 +102,12 @@ std::string dispatch(const std::vector<std::string_view> &args, Store &store,
     return ":" + std::to_string(set ? 1 : 0) + "\r\n";
   }
 
+  if (cmd == "DBSIZE") {
+    if (args.size() != 1) {
+      return "-ERR wrong number of arguments for 'DBSIZE' command\r\n";
+    }
+    return ":" + std::to_string(store.size()) + "\r\n";
+  }
+
   return "-ERR unknown command '" + std::string(args[0]) + "'\r\n";
 }
