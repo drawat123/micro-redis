@@ -90,12 +90,11 @@ bool Store::exists(std::string_view key, TimePoint now) {
   return getEntry(key, now, false) != index_.end(); // EXISTS is a peek
 }
 
-std::size_t Store::size() const {
-  return index_.size();
-}
+std::size_t Store::size() const { return index_.size(); }
 
-Store::IndexIterator Store::getEntry(std::string_view key, TimePoint now, bool update_lru) {
-  auto idxItr = index_.find(std::string(key));
+Store::IndexIterator Store::getEntry(std::string_view key, TimePoint now,
+                                     bool update_lru) {
+  auto idxItr = index_.find(key);
   if (idxItr == index_.end()) {
     return index_.end();
   }

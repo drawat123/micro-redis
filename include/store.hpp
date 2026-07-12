@@ -37,11 +37,20 @@ private:
     std::optional<TimePoint> expires_at; // nullopt = never
   };
 
+  struct TransparentHash {
+    using is_transparent = void; // ← the opt-in marker; this is the magic
+    std::size_t operator()(std::string_view sv) const noexcept {
+      return std::hash<std::string_view>{}(sv);
+    }
+  };
+
   using StrEntryPair = std::pair<std::string, Entry>;
 
   using LruIterator = std::list<StrEntryPair>::iterator;
 
-  using IndexIterator = std::unordered_map<std::string, LruIterator>::iterator;
+  using Index = std::unordered_map<std::string, LruIterator, TransparentHash,
+                                   std::equal_to<>>;
+  using IndexIterator = Index::iterator;
 
   IndexIterator getEntry(std::string_view key, TimePoint now, bool update_lru);
 
@@ -49,5 +58,5 @@ private:
 
   // front = most-recently-used, back = least-recently-used
   std::list<StrEntryPair> lru_;
-  std::unordered_map<std::string, LruIterator> index_; // key -> node
+  Index index_; // key -> node
 };

@@ -15,6 +15,7 @@
 #include <cstring>
 #include <format>
 #include <iostream>
+#include <netinet/tcp.h>
 #include <system_error>
 #include <unordered_map>
 
@@ -23,6 +24,8 @@ namespace {
 struct Connection {
   Fd fd;
   std::string inbuf;
+  std::string outbuf;
+  bool watching_write = false; // is EPOLLOUT currently armed for this fd?
 };
 
 // Turn a failed syscall (which reports errno) into a C++ exception
@@ -88,9 +91,53 @@ Fd make_listener(std::uint16_t port) {
   return listener;
 }
 
+// Arm or disarm EPOLLOUT for a client based on whether it still has unsent
+// output. A socket is almost always writable, so we watch EPOLLOUT ONLY while
+// there's data queued — leaving it armed with an empty buffer would wake us in
+// a busy loop.
+void arm_write(int epoll_fd, int fd, Connection &conn) {
+  bool want = !conn.outbuf.empty();
+  if (want == conn.watching_write) {
+    return; // no change — skip the epoll_ctl syscall
+  }
+  epoll_event ev{};
+  ev.events = EPOLLIN | EPOLLET | (want ? EPOLLOUT : 0u);
+  ev.data.fd = fd;
+  if (::epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev) < 0) {
+    fail("epoll_ctl(MOD)");
+  }
+  conn.watching_write = want;
+}
+
+// Send as much of conn.outbuf as the kernel will accept right now.
+//   - fully sent     -> clear buffer, drop EPOLLOUT.
+//   - partial/EAGAIN -> keep the remainder and arm EPOLLOUT, so we're woken to
+//                       finish once the socket's send buffer drains.
+// Returns false on a hard write error (caller closes the connection).
+bool flush_output(int epoll_fd, int fd, Connection &conn) {
+  while (!conn.outbuf.empty()) {
+    ssize_t n =
+        ::send(fd, conn.outbuf.data(), conn.outbuf.size(), MSG_NOSIGNAL);
+    if (n > 0) {
+      conn.outbuf.erase(0, static_cast<size_t>(n));
+      continue;
+    }
+    if (n < 0 && errno == EINTR) {
+      continue; // interrupted before sending anything — retry
+    }
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      break; // send buffer full; we'll finish on the next EPOLLOUT
+    }
+    return false; // hard error (e.g. EPIPE) — the connection is dead
+  }
+  arm_write(epoll_fd, fd, conn);
+  return true;
+}
+
 } // namespace
 
-Server::Server(std::uint16_t port, std::size_t maxkeys) : store_(maxkeys), port_(port) {}
+Server::Server(std::uint16_t port, std::size_t maxkeys)
+    : store_(maxkeys), port_(port) {}
 
 void Server::run() {
   Fd listener = make_listener(port_);
@@ -165,77 +212,91 @@ void Server::run() {
                       EPOLLET); // Using Edge-Triggered mode for performance
 
         connections.emplace(client,
-                            Connection{Fd(client), {}}); // take ownership
+                            Connection{Fd(client), {}, {}}); // take ownership
+
+        int yes = 1;
+        setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
 
         std::cout << "New client accepted on file descriptor: " << client
                   << "\n";
       }
-      // Scenario B: An existing client socket has sent data to read
-      else if (ready[i].events & EPOLLIN) {
-        size_t offset = 0;
-        bool close_conn = false;
+      // Scenario B: activity on an existing client socket.
+      else {
         auto &conn = connections.at(current_fd);
+        bool close_conn = false;
 
-        while (true) {
-          std::array<char, 1024> buf{}; // scratch buffer for read
-          ssize_t bytes_read = ::read(current_fd, buf.data(), buf.size());
+        // --- Readable: pull in bytes, parse & dispatch complete commands. ---
+        if (ready[i].events & EPOLLIN) {
+          size_t offset = 0;
 
-          if (bytes_read > 0) {
-            conn.inbuf.append(buf.data(), bytes_read);
+          while (true) {
+            std::array<char, 1024> buf{}; // scratch buffer for read
+            ssize_t bytes_read = ::read(current_fd, buf.data(), buf.size());
 
-            // Parse loop: execute all complete commands currently in the buffer
-            while (true) {
-              std::string_view view = conn.inbuf;
-              view.remove_prefix(offset);
-              if (view.empty()) {
+            if (bytes_read > 0) {
+              conn.inbuf.append(buf.data(), bytes_read);
+
+              // Parse loop: execute every complete command in the buffer.
+              while (true) {
+                std::string_view view = conn.inbuf;
+                view.remove_prefix(offset);
+                if (view.empty()) {
+                  break;
+                }
+
+                ParseResult res = parse_command(view);
+                if (res.status == ParseStatus::Incomplete) {
+                  break; // wait for more bytes from the socket
+                }
+                if (res.status == ParseStatus::Error) {
+                  close_conn = true;
+                  break; // close the connection
+                }
+
+                // Queue the reply; it's flushed once, below (reply batching).
+                conn.outbuf.append(dispatch(res.args, store_, Clock::now()));
+
+                offset += res.consumed; // advance past this command
+              }
+
+              if (close_conn) {
                 break;
               }
 
-              ParseResult res = parse_command(view);
-              if (res.status == ParseStatus::Incomplete) {
-                break; // wait for more bytes from the socket
-              }
-              if (res.status == ParseStatus::Error) {
-                close_conn = true;
-                break; // close the connection
+            } else {
+              // read() returned -1 or 0.
+              if (bytes_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                break; // Socket drained. Not an error — done reading for now.
               }
 
-              std::string reply = dispatch(res.args, store_, Clock::now());
-              ::send(current_fd, reply.data(), reply.length(), MSG_NOSIGNAL);
-
-              offset += res.consumed; // advance past this command
-            }
-
-            if (close_conn) {
+              // EOF (0) or a hard error: the connection is dead.
+              close_conn = true;
+              if (bytes_read == 0) {
+                std::cout << "Client " << current_fd
+                          << " disconnected cleanly.\n";
+              } else {
+                std::cerr << "Client read error on socket " << current_fd
+                          << ": " << std::strerror(errno) << "\n";
+              }
               break;
             }
-
-          } else {
-            // Read returned -1 or 0
-            if (bytes_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-              break; // Buffer is dry. Not an error, just done reading for now.
-            }
-
-            // If it reaches here, the connection is dead (either EOF or a hard
-            // error)
-            close_conn = true;
-            if (bytes_read == 0) {
-              std::cout << "Client " << current_fd
-                        << " disconnected cleanly.\n";
-            } else {
-              std::cerr << "Client read error on socket " << current_fd << ": "
-                        << std::strerror(errno) << "\n";
-            }
-            break;
           }
+
+          conn.inbuf.erase(0,
+                           offset); // drop consumed commands, keep any partial
+        }
+
+        // --- Writable / flush: send whatever is queued in outbuf. ---
+        // Runs after a read (to send freshly-queued replies) and on a pure
+        // EPOLLOUT wakeup (to finish a previously partial send). flush_output
+        // handles short writes and arms/disarms EPOLLOUT accordingly.
+        if (!close_conn && !flush_output(epoll.get(), current_fd, conn)) {
+          close_conn = true;
         }
 
         if (close_conn) {
           ::epoll_ctl(epoll.get(), EPOLL_CTL_DEL, current_fd, nullptr);
           connections.erase(current_fd);
-        } else {
-          // drop everything consumed; keep the leftover
-          conn.inbuf.erase(0, offset);
         }
       }
     }
