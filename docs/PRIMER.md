@@ -222,10 +222,8 @@ the L5 depth. Don't build ahead — learn each concept when its rung needs it.
 ## 10. Before you type: environment
 
 This project uses `epoll`, later `io_uring`, `/proc`, `perf`, and `valgrind` —
-**all Linux-only**. You're on macOS/Apple Silicon, so you'll build inside a Linux
-container (Docker, already installed). See **`TOOLCHAIN.md`** for the full
-Visual-Studio → Linux-CLI crosswalk and the Docker dev setup. The scaffold step
-sets this up for you.
+**all Linux-only**. On macOS you build inside a Linux container (Docker); see the
+`Dockerfile` and the build instructions in the top-level `README.md`.
 
 ---
 

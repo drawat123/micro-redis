@@ -100,7 +100,7 @@ Each rung's reasoning, bugs, and lessons are documented:
 
 - [`docs/PRIMER.md`](docs/PRIMER.md) — how Redis actually works
 - [`docs/notes/`](docs/notes/) — per-rung design notes (rung 0–4)
-- [`docs/DEBUGGING.md`](docs/DEBUGGING.md), [`docs/TOOLCHAIN.md`](docs/TOOLCHAIN.md) — tooling
+- [`docs/DEBUGGING.md`](docs/DEBUGGING.md) — terminal gdb reference
 
 ## Roadmap
 

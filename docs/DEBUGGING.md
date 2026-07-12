@@ -5,7 +5,7 @@
 > having anyway. It's the same debugger VS Code drives, minus the flaky layer.
 >
 > Run everything below **inside the container** (that's where the Linux binary,
-> symbols, and gdb live). See `TOOLCHAIN.md §3` for the full VS-Code ⇄ gdb map.
+> symbols, and gdb live).
 
 ---
 
